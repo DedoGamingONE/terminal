@@ -139,28 +139,19 @@ try
 
     DWRITE_FONT_WEIGHT weight = _fontRenderData->DefaultFontWeight();
     DWRITE_FONT_STYLE style = _fontRenderData->DefaultFontStyle();
-    const DWRITE_FONT_STRETCH stretch = _fontRenderData->DefaultFontStretch();
 
     if (drawingContext->useBoldFont)
     {
         // TODO: "relative" bold?
         weight = DWRITE_FONT_WEIGHT_BOLD;
-        // Since we are setting the font weight according to the text attribute,
-        // make sure to tell the text format to ignore the user set font weight
-        _fontRenderData->InhibitUserWeight(true);
     }
-    else
-    {
-        _fontRenderData->InhibitUserWeight(false);
-    }
-
-    if (drawingContext->useItalicFont || _fontRenderData->DidUserSetItalic())
+    if (drawingContext->useItalicFont)
     {
         style = DWRITE_FONT_STYLE_ITALIC;
     }
 
-    _formatInUse = _fontRenderData->TextFormatWithAttribute(weight, style, stretch).Get();
-    _fontInUse = _fontRenderData->FontFaceWithAttribute(weight, style, stretch).Get();
+    _formatInUse = _fontRenderData->TextFormatWithAttribute(weight, style).Get();
+    _fontInUse = _fontRenderData->FontFaceWithAttribute(weight, style).Get();
 
     RETURN_IF_FAILED(_AnalyzeTextComplexity());
     RETURN_IF_FAILED(_AnalyzeRuns());
@@ -403,12 +394,25 @@ CATCH_RETURN()
         std::vector<DWRITE_SHAPING_TEXT_PROPERTIES> textProps(textLength);
         std::vector<DWRITE_SHAPING_GLYPH_PROPERTIES> glyphProps(maxGlyphCount);
 
-        // Get the features to apply to the font
-        const auto& features = _fontRenderData->DefaultFontFeatures();
-#pragma warning(suppress : 26492) // Don't use const_cast to cast away const or volatile (type.3).
-        DWRITE_TYPOGRAPHIC_FEATURES typographicFeatures = { const_cast<DWRITE_FONT_FEATURE*>(features.data()), gsl::narrow<uint32_t>(features.size()) };
-        DWRITE_TYPOGRAPHIC_FEATURES const* typographicFeaturesPointer = &typographicFeatures;
-        const uint32_t fontFeatureLengths[] = { textLength };
+#pragma warning(push)
+#pragma warning(disable : 26494) // Variable '...' is uninitialized. Always initialize an object (type.5).
+        // None of these variables need to be initialized.
+        // features/featureRangeLengths are marked _In_reads_opt_(featureRanges).
+        // featureRanges is only > 0 when we also initialize all these variables.
+        DWRITE_TYPOGRAPHIC_FEATURES typographicFeatures;
+        const DWRITE_TYPOGRAPHIC_FEATURES* typographicFeaturesPointer;
+        UINT32 fontFeatureLengths;
+#pragma warning(pop)
+        UINT32 featureRanges = 0;
+
+        if (const auto& features = _fontRenderData->DefaultFontFeatures(); !features.empty())
+        {
+            typographicFeatures.features = const_cast<DWRITE_FONT_FEATURE*>(features.data());
+            typographicFeatures.featureCount = gsl::narrow_cast<UINT32>(features.size());
+            typographicFeaturesPointer = &typographicFeatures;
+            fontFeatureLengths = textLength;
+            featureRanges = 1;
+        }
 
         // Get the glyphs from the text, retrying if needed.
 
@@ -428,8 +432,8 @@ CATCH_RETURN()
                 _localeName.data(),
                 (run.isNumberSubstituted) ? _numberSubstitution.Get() : nullptr,
                 &typographicFeaturesPointer, // features
-                &fontFeatureLengths[0], // featureLengths
-                1, // featureCount
+                &fontFeatureLengths,
+                featureRanges,
                 maxGlyphCount, // maxGlyphCount
                 &_glyphClusters.at(textStart),
                 &textProps.at(0),
@@ -478,8 +482,8 @@ CATCH_RETURN()
             &run.script,
             _localeName.data(),
             &typographicFeaturesPointer, // features
-            &fontFeatureLengths[0], // featureLengths
-            1, // featureCount
+            &fontFeatureLengths,
+            featureRanges,
             &_glyphAdvances.at(glyphStart),
             &_glyphOffsets.at(glyphStart));
 
@@ -1286,7 +1290,7 @@ CATCH_RETURN();
         // newer MapCharacters to apply axes of variation to the font
         if (!FAILED(_formatInUse->QueryInterface(IID_PPV_ARGS(&format3))) && !FAILED(fallback->QueryInterface(IID_PPV_ARGS(&fallback1))))
         {
-            const auto axesVector = _fontRenderData->GetAxisVector(weight, stretch, style, format3.Get());
+            const auto axesVector = _fontRenderData->GetAxisVector(weight, style);
             // Walk through and analyze the entire string
             while (textLength > 0)
             {
